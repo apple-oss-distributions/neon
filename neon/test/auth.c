@@ -1,6 +1,6 @@
 /* 
    Authentication tests
-   Copyright (C) 2001-2008, Joe Orton <joe@manyfish.co.uk>
+   Copyright (C) 2001-2009, Joe Orton <joe@manyfish.co.uk>
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -383,6 +383,7 @@ struct digest_parms {
         fail_not,
         fail_bogus_alg,
         fail_req0_stale,
+        fail_req0_2069_stale,
         fail_omit_qop,
         fail_omit_realm,
         fail_omit_nonce,
@@ -658,6 +659,7 @@ static char *make_digest_header(struct digest_state *state,
     }
 
     if (parms->failure == fail_req0_stale
+        || parms->failure == fail_req0_2069_stale
         || parms->stale == parms->num_requests) {
         ne_buffer_concat(buf, "stale='true', ", NULL);
     }
@@ -718,7 +720,8 @@ static int serve_digest(ne_socket *sock, void *userdata)
     /* Give up now if we've sent a challenge which should force the
      * client to fail immediately: */
     if (parms->failure == fail_bogus_alg
-        || parms->failure == fail_req0_stale) {
+        || parms->failure == fail_req0_stale
+        || parms->failure == fail_req0_2069_stale) {
         return OK;
     }
 
@@ -780,7 +783,10 @@ static int test_digest(struct digest_parms *parms)
 {
     ne_session *sess;
 
-    NE_DEBUG(NE_DBG_HTTP, ">>>> Request sequence begins.\n");
+    NE_DEBUG(NE_DBG_HTTP, ">>>> Request sequence begins "
+             "(nonce=%s, rfc=%s, stale=%d).\n",
+             parms->nonce, parms->rfc2617 ? "2617" : "2069",
+             parms->stale);
 
     if (parms->proxy) {
         sess = ne_session_create("http", "www.example.com", 80);
@@ -815,9 +821,11 @@ static int digest(void)
         { "WallyWorld", "nonce-nonce-nonce", "opaque-string", NULL, 1, 1, 1, 0, 0, 1, 0, fail_not },
         /* many requests, with changing nonces; tests for next-nonce handling bug. */
         { "WallyWorld", "this-is-a-nonce", "opaque-thingy", NULL, 1, 1, 0, 0, 1, 20, 0, fail_not },
+
         /* staleness. */
         { "WallyWorld", "this-is-a-nonce", "opaque-thingy", NULL, 1, 1, 0, 0, 0, 3, 2, fail_not },
-
+        /* 2069 + stale */
+        { "WallyWorld", "this-is-a-nonce", NULL, NULL, 0, 1, 0, 0, 0, 3, 2, fail_not },
 
         /* RFC 2069-style */ 
         { "WallyWorld", "lah-di-da-di-dah", NULL, NULL, 0, 0, 0, 0, 0, 1, 0, fail_not },
@@ -857,6 +865,7 @@ static int digest_failures(void)
         { fail_ai_omit_cnonce, "missing parameters" },
         { fail_bogus_alg, "unknown algorithm" },
         { fail_req0_stale, "initial Digest challenge was stale" },
+        { fail_req0_2069_stale, "initial Digest challenge was stale" },
         { fail_not, NULL }
     };
     size_t n;
@@ -866,7 +875,6 @@ static int digest_failures(void)
     parms.realm = "WallyWorld";
     parms.nonce = "random-invented-string";
     parms.opaque = NULL;
-    parms.rfc2617 = 1;
     parms.send_ainfo = 1;
     parms.num_requests = 1;
 
@@ -876,6 +884,14 @@ static int digest_failures(void)
 
         parms.failure = fails[n].mode;
 
+        if (parms.failure == fail_req0_2069_stale)
+            parms.rfc2617 = 0;
+        else
+            parms.rfc2617 = 1;
+
+        NE_DEBUG(NE_DBG_HTTP, ">>> New Digest failure test, "
+                 "expecting failure '%s'\n", fails[n].message);
+        
         ne_set_server_auth(sess, auth_cb, NULL);
         CALL(spawn_server(7777, serve_digest, &parms));
         
@@ -1115,7 +1131,61 @@ static int defaults(void)
     return await_server();
 }
 
-/* test logout */
+static void fail_hdr(char *value)
+{
+    auth_failed = 1;
+}
+
+static int serve_forgotten(ne_socket *sock, void *userdata)
+{
+    auth_failed = 0;
+    got_header = fail_hdr;
+    want_header = "Authorization";
+    
+    CALL(discard_request(sock));
+    if (auth_failed) {
+        /* Should not get initial Auth header.  Eek. */
+        send_response(sock, NULL, 403, 1);
+        return 0;
+    }
+    send_response(sock, CHAL_WALLY, 401, 0);
+    
+    got_header = auth_hdr;
+    CALL(discard_request(sock));
+    if (auth_failed) {
+        send_response(sock, NULL, 403, 1);
+        return 0;
+    }
+    send_response(sock, NULL, 200, 0);
+    
+    ne_sock_read_timeout(sock, 5);
+
+    /* Last time; should get no Auth header. */
+    got_header = fail_hdr;
+    CALL(discard_request(sock));
+    send_response(sock, NULL, auth_failed ? 500 : 200, 1);
+    
+    return 0;                  
+}
+
+static int forget(void)
+{
+    ne_session *sess;
+
+    CALL(make_session(&sess, serve_forgotten, NULL));
+
+    ne_set_server_auth(sess, auth_cb, NULL);
+    
+    CALL(any_2xx_request(sess, "/norman"));
+    
+    ne_forget_auth(sess);
+
+    CALL(any_2xx_request(sess, "/norman"));
+
+    ne_session_destroy(sess);
+    
+    return await_server();
+}
 
 /* proxy auth, proxy AND origin */
 
@@ -1133,5 +1203,6 @@ ne_test tests[] = {
     T(domains),
     T(defaults),
     T(CVE_2008_3746),
+    T(forget),
     T(NULL)
 };

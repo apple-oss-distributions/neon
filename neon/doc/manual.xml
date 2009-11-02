@@ -32,6 +32,7 @@
 <!ENTITY section.features SYSTEM "feat.xml">
 <!ENTITY section.using SYSTEM "using.xml">
 <!ENTITY section.xml SYSTEM "xml.xml">
+<!ENTITY section.security SYSTEM "security.xml">
 <!ENTITY section.ssl SYSTEM "ssl.xml">
 
 <!ENTITY biblio SYSTEM "biblio.xml">
@@ -80,10 +81,10 @@
   <bookinfo>
     <title>neon HTTP/WebDAV client library</title>
     <author>
-      <firstname>Joe</firstname><surname>Orton</surname>
-      <affiliation>
-	<address><email>neon@lists.manyfish.co.uk</email></address>
-      </affiliation>
+      <personname>
+        <firstname>Joe</firstname><surname>Orton</surname>
+      </personname>
+      <email>neon@lists.manyfish.co.uk</email>
     </author>
     <copyright><year>2001-2008</year><holder>Joe Orton</holder></copyright>
 
@@ -129,6 +130,8 @@ ignoring the WebDAV support if desired.</para>
 
     &section.using;
     
+    &section.security;
+
   </chapter>
  
   <chapter id="api">
